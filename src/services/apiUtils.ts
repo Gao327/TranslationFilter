@@ -71,7 +71,7 @@ export class ApiErrorHandler {
 
     // 百度API特定错误
     if (error.response?.data?.error_code) {
-      const errorCode = error.response.data.error_code;
+      const errorCode = String(error.response.data.error_code);
       const errorMsg = error.response.data.error_msg || '未知错误';
 
       switch (errorCode) {

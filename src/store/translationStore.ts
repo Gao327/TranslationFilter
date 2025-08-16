@@ -19,7 +19,7 @@ export interface TranslationRecord {
 export interface UserSettings {
   defaultSourceLang: string;
   defaultTargetLang: string;
-  preferredModel: 'google' | 'openai' | 'azure';
+  preferredModel: 'baidu' | 'google' | 'openai' | 'azure';
   overlayOpacity: number;
   autoDetect: boolean;
   saveHistory: boolean;

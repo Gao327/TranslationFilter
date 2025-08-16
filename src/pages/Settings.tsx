@@ -7,7 +7,7 @@ export default function Settings() {
   const [autoDetect, setAutoDetect] = useState(true);
   const [notifications, setNotifications] = useState(true);
   const [overlayEnabled, setOverlayEnabled] = useState(true);
-  const [preferredModel, setPreferredModel] = useState('google');
+  const [preferredModel, setPreferredModel] = useState('baidu');
   const [defaultSourceLang, setDefaultSourceLang] = useState('auto');
   const [defaultTargetLang, setDefaultTargetLang] = useState('en');
   const [overlayOpacity, setOverlayOpacity] = useState(0.8);
@@ -42,6 +42,7 @@ export default function Settings() {
           value: preferredModel,
           onChange: setPreferredModel,
           options: [
+            { value: 'baidu', label: 'Baidu 翻译' },
             { value: 'google', label: 'Google 翻译' },
             { value: 'openai', label: 'OpenAI GPT' },
             { value: 'azure', label: 'Azure 翻译' }

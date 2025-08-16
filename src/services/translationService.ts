@@ -231,18 +231,12 @@ class BaiduTranslationServiceAdapter {
     
     console.log('- 百度翻译服务实例:', baiduTranslationService);
     
-    // 检查环境变量
+    // 记录环境变量可见性，但不要阻断，因为服务内部有默认配置回退
     const appId = import.meta.env.VITE_BAIDU_APP_ID;
     const apiKey = import.meta.env.VITE_BAIDU_API_KEY;
     console.log('- 环境变量检查:');
     console.log('  - VITE_BAIDU_APP_ID:', appId ? '已设置' : '未设置');
     console.log('  - VITE_BAIDU_API_KEY:', apiKey ? '已设置' : '未设置');
-    
-    if (!appId || !apiKey) {
-      const error = new Error('百度翻译API密钥未配置');
-      console.error('❌ 配置错误:', error.message);
-      throw error;
-    }
     
     try {
       console.log('📞 正在调用百度翻译服务...');
