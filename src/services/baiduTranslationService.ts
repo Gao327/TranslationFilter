@@ -2,6 +2,7 @@ import axios from 'axios';
 import CryptoJS from 'crypto-js';
 import { apiUtils, RetryHandler, UsageStatsManager } from './apiUtils';
 import { translationCacheService } from './cacheService';
+import { browserEnvironment, environmentConfig, getDebugInfo } from '../utils/browserDetection';
 
 // 检测是否在浏览器环境中
 const isBrowser = typeof window !== 'undefined';
@@ -12,8 +13,9 @@ const BAIDU_API_CONFIG = {
   apiKey: import.meta.env.VITE_BAIDU_API_KEY || 'b3a1JQGV7LUYIEVti14j',
   // 在浏览器环境中使用代理，在Node.js环境中直接访问
   textApiUrl: isBrowser ? '/api/baidu/api/trans/vip/translate' : 'https://fanyi-api.baidu.com/api/trans/vip/translate',
-  imageApiUrl: isBrowser ? '/api/baidu/api/trans/vip/picture' : 'https://fanyi-api.baidu.com/api/trans/vip/picture',
-  speechApiUrl: isBrowser ? '/api/baidu/api/trans/vip/speech' : 'https://fanyi-api.baidu.com/api/trans/vip/speech',
+  // 图片/语音翻译使用 sdk 路径
+  imageApiUrl: isBrowser ? '/api/baidu/api/trans/sdk/picture' : 'https://fanyi-api.baidu.com/api/trans/sdk/picture',
+  speechApiUrl: isBrowser ? '/api/baidu/api/trans/sdk/speech' : 'https://fanyi-api.baidu.com/api/trans/sdk/speech',
 };
 
 // 百度翻译语言代码映射
@@ -155,11 +157,27 @@ export class BaiduTranslationService {
     confidence: number;
     detectedLanguage?: string;
   }> {
+    // 环境检测和调试信息
+    if (browserEnvironment.isEmbedded) {
+      console.log('🔧 检测到嵌入式浏览器环境，应用兼容性修复');
+      if (import.meta.env.DEV) {
+        console.log('🔍 调试信息:', getDebugInfo());
+      }
+    }
+    
     // 运行时检查API配置
     if (!this.appId || !this.apiKey) {
       console.error('❌ 百度翻译API配置缺失');
       console.error('- APP ID:', this.appId || '未设置');
       console.error('- API Key:', this.apiKey ? '已设置' : '未设置');
+      console.error('- 浏览器环境:', browserEnvironment.isEmbedded ? '嵌入式' : '独立');
+      
+      // 在嵌入式环境中提供更详细的错误信息
+      if (browserEnvironment.isEmbedded) {
+        console.error('- 嵌入式浏览器可能存在环境变量访问限制');
+        console.error('- 请确保在 Trae 中正确配置了环境变量');
+      }
+      
       throw new Error('百度翻译API配置缺失，请检查环境变量 VITE_BAIDU_APP_ID 和 VITE_BAIDU_API_KEY');
     }
     
@@ -191,23 +209,30 @@ export class BaiduTranslationService {
         sign
       };
 
+      // 根据环境选择API端点
+      const apiUrl = browserEnvironment.isEmbedded 
+        ? '/api/baidu/api/trans/vip/translate'  // 使用代理
+        : BAIDU_API_CONFIG.textApiUrl;  // 直接调用
+
       console.log('🚀 开始百度翻译API调用');
       console.log('- 原文:', request.text);
       console.log('- 源语言:', request.sourceLang);
       console.log('- 目标语言:', request.targetLang);
+      console.log('- 环境:', browserEnvironment.isEmbedded ? '嵌入式(代理)' : '独立(直接)');
       
       console.log('📤 百度翻译API调用参数:');
-      console.log('- URL:', BAIDU_API_CONFIG.textApiUrl);
+      console.log('- URL:', apiUrl);
       console.log('- 参数:', { ...params, sign: sign.substring(0, 8) + '***' });
 
       const response = await axios.post<BaiduTranslationResponse>(
-        BAIDU_API_CONFIG.textApiUrl,
+        apiUrl,
         new URLSearchParams(params),
         {
           headers: {
-            'Content-Type': 'application/x-www-form-urlencoded'
+            'Content-Type': 'application/x-www-form-urlencoded',
+            ...environmentConfig.headers
           },
-          timeout: 10000
+          timeout: environmentConfig.timeout
         }
       );
       
@@ -233,9 +258,9 @@ export class BaiduTranslationService {
 
     try {
       const result = await RetryHandler.executeWithRetry(operation, {
-        maxRetries: 2,
-        baseDelay: 1000,
-        maxDelay: 5000
+        maxRetries: environmentConfig.maxRetries,
+        baseDelay: environmentConfig.retryDelay,
+        maxDelay: environmentConfig.retryDelay * 4
       });
       
       // 更新使用统计
@@ -251,12 +276,56 @@ export class BaiduTranslationService {
       );
       
       return result;
-    } catch (error) {
-      // 更新失败统计
+    } catch (error: any) {
+      console.error('❌ 百度翻译API调用失败:', error);
+      
+      // 环境特定的错误处理
+      if (browserEnvironment.isEmbedded) {
+        console.error('🔧 嵌入式浏览器环境错误详情:');
+        console.error('- 错误类型:', error.name);
+        console.error('- 错误消息:', error.message);
+        console.error('- 网络状态:', navigator.onLine ? '在线' : '离线');
+        console.error('- 浏览器能力:', browserEnvironment.capabilities);
+        console.error('- 环境限制:', browserEnvironment.restrictions);
+        
+        // 检查是否是CORS或网络相关错误
+        if (error.message?.includes('CORS') || 
+            error.message?.includes('Network') ||
+            error.message?.includes('fetch') ||
+            error.name === 'TypeError') {
+          console.error('🚨 检测到网络/CORS错误，这在嵌入式浏览器中很常见');
+          console.error('💡 建议: 确保代理配置正确，或联系技术支持');
+        }
+        
+        // 在开发环境中提供调试信息
+        if (import.meta.env.DEV) {
+          console.error('🔍 完整调试信息:', getDebugInfo());
+        }
+      }
+      
+      // 更新使用统计
       UsageStatsManager.updateStats('text', request.text.length, false);
       
-      console.error('百度文本翻译错误:', error);
-      throw error;
+      // 构造详细的错误消息
+      let errorMessage = '翻译失败';
+      
+      if (browserEnvironment.isEmbedded) {
+        errorMessage += ' (嵌入式浏览器环境)';
+        
+        if (error.message?.includes('CORS')) {
+          errorMessage += ': CORS策略限制，请检查代理配置';
+        } else if (error.message?.includes('timeout')) {
+          errorMessage += ': 请求超时，网络可能较慢';
+        } else if (error.message?.includes('Network')) {
+          errorMessage += ': 网络连接问题';
+        } else {
+          errorMessage += `: ${error.message || '未知错误'}`;
+        }
+      } else {
+        errorMessage += `: ${error.message || '未知错误'}`;
+      }
+      
+      throw new Error(errorMessage);
     }
   }
 
@@ -288,7 +357,7 @@ export class BaiduTranslationService {
       const salt = Date.now().toString();
       const from = BAIDU_LANGUAGE_MAP[request.sourceLang] || 'auto';
       const to = BAIDU_LANGUAGE_MAP[request.targetLang] || 'en';
-      const sign = generateSign(request.image, this.appId, salt, this.apiKey);
+      let sign = generateSign(request.image, this.appId, salt, this.apiKey);
 
       const params = {
         image: request.image,
@@ -300,7 +369,7 @@ export class BaiduTranslationService {
         paste: (request.paste || 0).toString()
       };
 
-      const response = await axios.post<BaiduImageTranslationResponse>(
+      let response = await axios.post<BaiduImageTranslationResponse>(
         BAIDU_API_CONFIG.imageApiUrl,
         new URLSearchParams(params),
         {
@@ -312,9 +381,27 @@ export class BaiduTranslationService {
       );
 
       if (response.data.error_code) {
-        const error = new Error(`百度图片翻译API错误: ${response.data.error_msg} (${response.data.error_code})`);
-        (error as any).response = { data: response.data };
-        throw error;
+        // 针对签名错误做一次回退：对 image 先做 md5 再参与签名（部分 SDK 文档示例如此）
+        const errorCode = String((response.data as any).error_code);
+        if (errorCode === '54001') {
+          const imageMd5 = CryptoJS.MD5(request.image).toString();
+          sign = generateSign(imageMd5, this.appId, salt, this.apiKey);
+          const retryParams = { ...params, sign } as any;
+          response = await axios.post<BaiduImageTranslationResponse>(
+            BAIDU_API_CONFIG.imageApiUrl,
+            new URLSearchParams(retryParams),
+            {
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              timeout: 30000
+            }
+          );
+        }
+
+        if (response.data.error_code) {
+          const error = new Error(`百度图片翻译API错误: ${response.data.error_msg} (${response.data.error_code})`);
+          (error as any).response = { data: response.data };
+          throw error;
+        }
       }
 
       const textBlocks = response.data.data.content.map(item => ({
@@ -389,7 +476,7 @@ export class BaiduTranslationService {
       const salt = Date.now().toString();
       const from = BAIDU_LANGUAGE_MAP[request.sourceLang] || 'auto';
       const to = BAIDU_LANGUAGE_MAP[request.targetLang] || 'en';
-      const sign = generateSign(request.voice, this.appId, salt, this.apiKey);
+      let sign = generateSign(request.voice, this.appId, salt, this.apiKey);
 
       const params = {
         voice: request.voice,
@@ -403,7 +490,7 @@ export class BaiduTranslationService {
         sign
       };
 
-      const response = await axios.post<BaiduSpeechTranslationResponse>(
+      let response = await axios.post<BaiduSpeechTranslationResponse>(
         BAIDU_API_CONFIG.speechApiUrl,
         new URLSearchParams(params),
         {
@@ -415,9 +502,26 @@ export class BaiduTranslationService {
       );
 
       if (response.data.error_code) {
-        const error = new Error(`百度语音翻译API错误: ${response.data.error_msg} (${response.data.error_code})`);
-        (error as any).response = { data: response.data };
-        throw error;
+        const errorCode = String((response.data as any).error_code);
+        if (errorCode === '54001') {
+          const voiceMd5 = CryptoJS.MD5(request.voice).toString();
+          sign = generateSign(voiceMd5, this.appId, salt, this.apiKey);
+          const retryParams = { ...params, sign } as any;
+          response = await axios.post<BaiduSpeechTranslationResponse>(
+            BAIDU_API_CONFIG.speechApiUrl,
+            new URLSearchParams(retryParams),
+            {
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              timeout: 30000
+            }
+          );
+        }
+
+        if (response.data.error_code) {
+          const error = new Error(`百度语音翻译API错误: ${response.data.error_msg} (${response.data.error_code})`);
+          (error as any).response = { data: response.data };
+          throw error;
+        }
       }
 
       return {

@@ -3,6 +3,82 @@ let baiduTranslationService: any = null;
 let baiduImportError: Error | null = null;
 let baiduImportPromise: Promise<any> | null = null;
 
+// 可选浏览器环境检测
+let browserEnvironment: any = null;
+let environmentConfig: any = null;
+let getDebugInfo: any = null;
+let browserDetectionError: Error | null = null;
+let browserDetectionPromise: Promise<void> | null = null;
+
+// 默认的浏览器环境配置
+const defaultBrowserEnvironment = {
+  isEmbedded: false,
+  isTraeEmbedded: false,
+  isIframe: false,
+  restrictions: {
+    corsEnabled: true,
+    secureContext: true,
+    apiAccess: true
+  }
+};
+
+const defaultEnvironmentConfig = {
+  useProxy: false,
+  timeout: 10000,
+  retries: 3,
+  headers: {},
+  apiEndpoint: null
+};
+
+const defaultGetDebugInfo = () => ({
+  userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
+  location: typeof window !== 'undefined' ? window.location?.href : 'unknown',
+  browserDetectionAvailable: false,
+  error: browserDetectionError?.message
+});
+
+// 异步加载浏览器检测功能
+async function loadBrowserDetection() {
+  if (browserDetectionPromise) {
+    return browserDetectionPromise;
+  }
+  
+  browserDetectionPromise = (async () => {
+    try {
+      const browserDetectionModule = await import('../utils/browserDetection');
+      browserEnvironment = browserDetectionModule.browserEnvironment;
+      environmentConfig = browserDetectionModule.environmentConfig;
+      getDebugInfo = browserDetectionModule.getDebugInfo;
+      console.log('✅ 浏览器检测功能已加载');
+    } catch (error) {
+      browserDetectionError = error as Error;
+      console.warn('⚠️ 浏览器检测功能加载失败，使用默认配置:', error.message);
+      
+      // 使用默认配置
+      browserEnvironment = defaultBrowserEnvironment;
+      environmentConfig = defaultEnvironmentConfig;
+      getDebugInfo = defaultGetDebugInfo;
+    }
+  })();
+  
+  return browserDetectionPromise;
+}
+
+// 获取浏览器环境（带默认值）
+function getBrowserEnvironment() {
+  return browserEnvironment || defaultBrowserEnvironment;
+}
+
+// 获取环境配置（带默认值）
+function getEnvironmentConfig() {
+  return environmentConfig || defaultEnvironmentConfig;
+}
+
+// 获取调试信息（带默认值）
+function getBrowserDebugInfo() {
+  return getDebugInfo ? getDebugInfo() : defaultGetDebugInfo();
+}
+
 // 动态导入百度翻译服务
 async function loadBaiduTranslationService() {
   if (baiduImportPromise) {
@@ -215,12 +291,45 @@ class BaiduTranslationServiceAdapter {
     console.log('🔄 BaiduTranslationServiceAdapter.translate 被调用');
     console.log('- 请求参数:', request);
     
+    // 尝试加载浏览器检测功能（可选）
+    try {
+      await loadBrowserDetection();
+    } catch (error) {
+      console.warn('⚠️ 浏览器检测加载失败，继续使用默认配置:', error.message);
+    }
+    
+    const currentBrowserEnv = getBrowserEnvironment();
+    const currentEnvConfig = getEnvironmentConfig();
+    
+    console.log('- 浏览器环境:', currentBrowserEnv.isEmbedded ? '嵌入式' : '独立');
+    
+    // 在嵌入式环境中提供额外的调试信息
+    if (currentBrowserEnv.isEmbedded) {
+      console.log('🔧 嵌入式浏览器环境检测:');
+      console.log('- Trae嵌入式:', currentBrowserEnv.isTraeEmbedded);
+      console.log('- iframe环境:', currentBrowserEnv.isIframe);
+      console.log('- 环境限制:', currentBrowserEnv.restrictions);
+      console.log('- 使用代理:', currentEnvConfig.useProxy);
+      
+      if (import.meta.env.DEV) {
+        console.log('🔍 详细调试信息:', getBrowserDebugInfo());
+      }
+    }
+    
     // 动态加载百度翻译服务
     try {
       await loadBaiduTranslationService();
     } catch (error) {
       console.error('❌ 百度翻译服务加载失败，无法进行翻译');
       console.error('- 加载错误:', error.message);
+      
+      const currentBrowserEnv = getBrowserEnvironment();
+      console.error('- 浏览器环境:', currentBrowserEnv.isEmbedded ? '嵌入式' : '独立');
+      
+      if (currentBrowserEnv.isEmbedded) {
+        console.error('💡 嵌入式浏览器提示: 模块加载可能受到安全策略限制');
+      }
+      
       throw new Error(`百度翻译服务加载失败: ${error.message}`);
     }
     
@@ -240,6 +349,23 @@ class BaiduTranslationServiceAdapter {
     
     try {
       console.log('📞 正在调用百度翻译服务...');
+
+      // 校验语言支持，避免使用不在映射表内的代码
+      try {
+        const supported = baiduTranslationService.getSupportedLanguages().map((l: { code: string }) => l.code);
+        const isSourceSupported = request.sourceLang === 'auto' || supported.includes(request.sourceLang);
+        const isTargetSupported = supported.includes(request.targetLang);
+        if (!isTargetSupported) {
+          throw new Error(`目标语言不受百度翻译支持: ${request.targetLang}`);
+        }
+        if (!isSourceSupported) {
+          console.warn('源语言不受支持，改为自动检测:', request.sourceLang);
+          request = { ...request, sourceLang: 'auto' };
+        }
+      } catch (langCheckError) {
+        console.warn('语言支持校验警告:', (langCheckError as Error).message);
+      }
+
       const result = await baiduTranslationService.translateText({
         text: request.text,
         sourceLang: request.sourceLang,
